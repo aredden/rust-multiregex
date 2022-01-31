@@ -1,58 +1,13 @@
 pub mod cli;
+mod match_structs;
 
 use clap::StructOpt;
 use cli::{Args, FlagArgs};
-use rayon::{iter::{IntoParallelIterator, ParallelIterator}};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use regex::{Regex, RegexBuilder};
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, path};
+use std::{fs::{read_to_string, write}, path::Path};
+use match_structs::{RegexMap, SearchResult};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct SearchResult {
-    value: String,
-    start: i32,
-    end: i32,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct ResultObject {
-    regex: String,
-    lines: Vec<SearchResult>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-struct RegexMap {
-    matches: HashMap<String, ResultObject>,
-}
-
-impl RegexMap {
-    fn new(regexs: &[String]) -> Self {
-        let mut m: HashMap<String, ResultObject> = HashMap::<String, ResultObject>::new();
-        for mat in regexs {
-            m.insert(
-                mat.to_owned(),
-                ResultObject {
-                    regex: mat.to_owned(),
-                    lines: Vec::new(),
-                },
-            );
-        }
-        RegexMap { matches: m }
-    }
-
-    pub fn to_json(&mut self, pretty: bool) -> String {
-        //return the results as a json string
-        if pretty {
-            serde_json::to_string_pretty(&self).unwrap()
-        } else {
-            serde_json::to_string(&self).unwrap()
-        }
-    }
-}
-
-fn exists(reg: &str) -> bool {
-    path::Path::new(reg).exists()
-}
 
 fn build_regex(regex_set: Vec::<String>, flags: &FlagArgs) -> Vec<Regex> {
     regex_set
@@ -77,7 +32,7 @@ fn main() {
         "'regex_file' argument is empty"
     );
 
-    let input_text = fs::read_to_string(&args.input).expect(
+    let input_text = read_to_string(&args.input).expect(
         format!(
             "Something went wrong reading the file at \"{:?}\"",
             &args.input
@@ -85,8 +40,8 @@ fn main() {
         .as_str(),
     );
     let mut regex_items: Vec<String> = Vec::new();
-    if exists(&args.regex_file) {
-        let content = fs::read_to_string(&args.regex_file).expect(
+    if Path::new(&args.regex_file).exists() {
+        let content = read_to_string(&args.regex_file).expect(
             format!(
                 "Something went wrong reading the file at \"{:?}\"",
                 &args.regex_file
@@ -107,7 +62,7 @@ fn main() {
 
     let mut matches = match_multiregex(regex_items.as_slice(), &input_text, args.flags).unwrap();
     if !args.output.is_none() {
-        fs::write(args.output.unwrap(), matches.to_json(args.pretty)).unwrap();
+        write(args.output.unwrap(), matches.to_json(args.pretty)).unwrap();
     } else {
         print!("Matches: {:?}", matches.to_json(true));
     }
