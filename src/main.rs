@@ -2,28 +2,52 @@ pub mod cli;
 
 use clap::StructOpt;
 use cli::Args;
-use regex::{Regex, RegexSet};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct SearchResult {
     value: String,
-    line_no: i32,
+    start: i32,
+    end: i32,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct ResultObject {
     regex: String,
     lines: Vec<SearchResult>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct RegexMap {
-    matches: Vec<ResultObject>,
+    matches: HashMap<String, ResultObject>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct CaptureLocation {
+    start: usize,
+    end: usize,
+    line: String,
 }
 
 impl RegexMap {
+    fn new(regexs: &[String]) -> Self {
+        let mut m: HashMap<String, ResultObject> = HashMap::<String, ResultObject>::new();
+        for mat in regexs {
+            m.insert(
+                mat.to_owned(),
+                ResultObject {
+                    regex: mat.to_owned(),
+                    lines: Vec::new(),
+                },
+            );
+        }
+        RegexMap { matches: m }
+    }
+
     pub fn to_json(&mut self, pretty: bool) -> String {
         //return the results as a json string
         if pretty {
@@ -42,66 +66,68 @@ fn main() {
         .lines()
         .map(|r| r.to_owned())
         .collect::<Vec<String>>();
-    let matches = match_multiregex(regex_items.as_slice(), &input_text);
-    let mut m = match matches {
-        Some(val) => val,
-        None => panic!("called `Option::unwrap()` on a `None` value"),
-    };
+    let mut matches = match_multiregex(regex_items.as_slice(), &input_text).unwrap();
     if !args.output.is_none() {
-        fs::write(args.output.unwrap(), &m.to_json(true)).unwrap();
+        fs::write(args.output.unwrap(), matches.to_json(false)).unwrap();
     } else {
-        print!("Matches: {:?}", m.to_json(true));
+        print!("Matches: {:?}", matches.to_json(true));
     }
 }
 
-fn get_matched_items(r: Regex, s: &str) -> Option<Vec<String>> {
-    let captures: Vec<String> = r
+fn get_matched_items(r: Regex, s: &str) -> Option<Vec<CaptureLocation>> {
+    let captures: Vec<CaptureLocation> = r
         .captures_iter(s)
-        .map(|mat| {
+        .flat_map(|mat| {
             mat.iter()
-                .map(|m| m.unwrap().to_owned().as_str().to_owned())
-                .collect::<Vec<String>>()
-                .to_owned()
+                .map(|m| {
+                    let ma = m.unwrap().to_owned();
+                    CaptureLocation {
+                        start: ma.start(),
+                        end: ma.end(),
+                        line: m.unwrap().as_str().to_owned(),
+                    }
+                })
+                .collect::<Vec<CaptureLocation>>()
         })
-        .collect::<Vec<Vec<String>>>()
-        .iter()
-        .flatten()
-        .map(|e| e.to_owned())
-        .collect::<_>();
+        .collect::<Vec<CaptureLocation>>();
     Some(captures)
 }
 
 fn match_multiregex(regex_set: &[String], string: &str) -> Option<RegexMap> {
-    let set = RegexSet::new(regex_set).unwrap();
-    let num_regex = regex_set.len().to_owned();
-    let found = set.matches(string).to_owned();
-    let result = RegexMap {
-        matches: {
-            let mut found_matches: Vec<ResultObject> = Vec::new();
-            for i in 0..num_regex {
-                let mut src_results: Vec<SearchResult> = Vec::new();
-                for line in found.iter() {
-                    let r = Regex::new(&regex_set[i]).unwrap();
-                    if r.is_match(string) && line == i {
-                        let v: Vec<String> = get_matched_items(r, string).unwrap();
-                        if v.len() > 0 {
-                            for v in v.iter() {
-                                src_results.push(SearchResult {
-                                    line_no: i as i32,
-                                    value: v.to_owned(),
-                                });
-                            }
-                        }
-                    }
-                }
-                let obj = ResultObject {
-                    regex: regex_set[i].to_owned(),
-                    lines: src_results,
-                };
-                found_matches.append(&mut Vec::from([obj]));
+    // let set = RegexSet::new(regex_set).unwrap();
+    let regexi = regex_set
+        .clone()
+        .into_iter()
+        .map(|n| RegexBuilder::new(n).build().unwrap())
+        .collect::<Vec<Regex>>();
+    // let found = set.matches(string).to_owned();
+    let mut final_map = RegexMap::new(&regex_set);
+    let t: Vec<&Regex> = regexi.iter().collect();
+    let v = t
+        .into_par_iter()
+        .map(|r| {
+            let mut fin_map = final_map.clone();
+            let v: Vec<CaptureLocation> = get_matched_items(r.clone(), string).unwrap();
+            for t in v.iter() {
+                fin_map.matches.get_mut(r.as_str()).unwrap().lines.insert(
+                    0,
+                    SearchResult {
+                        start: t.start as i32,
+                        end: t.end as i32,
+                        value: t.line.clone(),
+                    },
+                );
             }
-            found_matches
-        },
-    };
-    Some(result)
+            fin_map
+        })
+        .collect::<Vec<RegexMap>>();
+
+    for map in v {
+        for key in map.matches.keys() {
+            final_map
+                .matches
+                .insert(key.clone(), map.matches[key].clone());
+        }
+    }
+    return Some(final_map);
 }
