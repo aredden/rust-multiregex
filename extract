@@ -1,2 +1,2 @@
 #! /bin/bash
-mv target/release/${PWD##*/} program
+mv target/release/multireg .
