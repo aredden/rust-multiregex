@@ -68,7 +68,15 @@ fn main() {
         .collect::<Vec<String>>();
     let mut matches = match_multiregex(regex_items.as_slice(), &input_text).unwrap();
     if !args.output.is_none() {
-        fs::write(args.output.unwrap(), matches.to_json(false)).unwrap();
+        fs::write(
+            args.output.unwrap(),
+            matches.to_json(match args.pretty {
+                1 => true,
+                0 => false,
+                _ => true,
+            }),
+        )
+        .unwrap();
     } else {
         print!("Matches: {:?}", matches.to_json(true));
     }
@@ -123,11 +131,10 @@ fn match_multiregex(regex_set: &[String], string: &str) -> Option<RegexMap> {
         .collect::<Vec<RegexMap>>();
 
     for map in v {
-        for key in map.matches.keys() {
-            final_map
-                .matches
-                .insert(key.clone(), map.matches[key].clone());
-        }
+        final_map.matches.iter_mut().for_each(|(ref k, v)| {
+            v.lines
+                .extend(map.matches.clone().get(k.to_owned()).unwrap().lines.clone());
+        })
     }
     return Some(final_map);
 }
